@@ -17,6 +17,8 @@
 - Snapshot read: `prime1 -> slot -> prime2` 더블체크
 - Eviction: prime 기반 victim 선택, private flush 후 prime 제거
 
+주의: 현재 RDMA 경로는 `librdmacm`의 `rsocket` 기반 two-sided RPC입니다. 즉, one-sided RDMA처럼 MN CPU를 완전히 우회하지는 않습니다.
+
 ## 2) 디렉터리 맵
 
 - `kvs/`: 실행 코드
@@ -67,6 +69,9 @@ TDX 강제 실행:
 - CN `cache_path_transport`
   - `rdma`: cache path는 RDMA만 허용
   - `auto`: RDMA 실패 시 TCP fallback
+- CN `trace_operations`
+  - `true`: read/write/update/delete마다 cache hit/miss + transport(RDMA/TCP/fallback) trace 출력
+  - `false`: trace 비활성화
 - RDMA 설정 시 `rdma_listen_host`/`mn_endpoints.host`에 loopback(`127.0.0.1`) 대신 RDMA NIC의 실제 IP를 사용
 
 ## 5) 실행 시나리오 A (TDX 게스트 내부)
@@ -95,6 +100,7 @@ python3 -m kvs --config build/config.mn2.example.json serve
 
 ```bash
 python3 -m kvs --config build/config.cn.example.json write user:1 hello
+python3 -m kvs --config build/config.cn.example.json update user:1 hello-v2
 python3 -m kvs --config build/config.cn.example.json read user:1
 python3 -m kvs --config build/config.cn.example.json delete user:1
 python3 -m kvs --config build/config.cn.example.json read user:1
@@ -139,6 +145,17 @@ python3 -m kvs --config build/config.cn.example.json state
 - `cache_slots`: 현재 캐시 사용 슬롯 수
 - `private_entries`: eviction 등으로 private backing에 존재하는 key 개수
 - `prime_keys`: 현재 prime table에 살아있는 key 목록
+
+RDMA 경로 점검:
+
+```bash
+python3 -m kvs --config build/config.cn.example.json verify-rdma
+```
+
+출력에서 확인할 핵심:
+- endpoint별 `rdma_read_prime` probe transport가 `rdma`인지
+- host IP가 active RDMA NIC(netdev)에 매핑되는지
+- `one_sided=false`, `mn_cpu_bypass=false` (현재 구현 한계 명시)
 
 ## 8) 추천 실험 순서
 

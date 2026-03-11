@@ -6,6 +6,7 @@
     "encryption_key_hex": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
     "replication_factor": 2,
     "cache_path_transport": "rdma",
+    "trace_operations": true,
     "populate_cache_on_read_miss": true,
     "max_retries": 16,
     "mn_endpoints": [

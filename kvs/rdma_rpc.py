@@ -3,10 +3,11 @@ from __future__ import annotations
 import ctypes
 import errno
 import json
+import os
 import socket
 import threading
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 
 class RDMAError(RuntimeError):
@@ -66,6 +67,149 @@ except Exception as _exc:  # pragma: no cover - depends on system setup
 
 def rdma_supported() -> bool:
     return _RDMACM is not None
+
+
+def rdma_transport_profile() -> Dict[str, Any]:
+    profile: Dict[str, Any] = {
+        "supported": rdma_supported(),
+        "library": "librdmacm.so.1",
+        "implementation": "rsocket-rpc",
+        "one_sided": False,
+        "mn_cpu_bypass": False,
+    }
+    if _RDMACM_ERR is not None:
+        profile["error"] = str(_RDMACM_ERR)
+    return profile
+
+
+def _read_sysfs_text(path: str) -> str:
+    try:
+        with open(path, "r", encoding="utf-8") as fp:
+            return fp.read().strip()
+    except OSError:
+        return ""
+
+
+def _parse_state_label(raw: str) -> str:
+    if ":" in raw:
+        return raw.split(":", maxsplit=1)[1].strip()
+    return raw.strip()
+
+
+def list_rdma_nics() -> List[Dict[str, Any]]:
+    devices: List[Dict[str, Any]] = []
+    base = "/sys/class/infiniband"
+    if not os.path.isdir(base):
+        return devices
+
+    for dev in sorted(os.listdir(base)):
+        dev_root = os.path.join(base, dev)
+        ports_root = os.path.join(dev_root, "ports")
+        net_root = os.path.join(dev_root, "device", "net")
+        netdevs = sorted(os.listdir(net_root)) if os.path.isdir(net_root) else []
+
+        ports: List[Dict[str, Any]] = []
+        if os.path.isdir(ports_root):
+            for port_name in sorted(os.listdir(ports_root)):
+                port_root = os.path.join(ports_root, port_name)
+                state_raw = _read_sysfs_text(os.path.join(port_root, "state"))
+                state_label = _parse_state_label(state_raw).upper()
+                phys_state_raw = _read_sysfs_text(os.path.join(port_root, "phys_state"))
+                link_layer = _read_sysfs_text(os.path.join(port_root, "link_layer"))
+                ports.append(
+                    {
+                        "port": port_name,
+                        "state": state_label,
+                        "physical_state": _parse_state_label(phys_state_raw),
+                        "link_layer": link_layer,
+                        "active": state_label == "ACTIVE",
+                    }
+                )
+
+        devices.append(
+            {
+                "device": dev,
+                "netdevs": netdevs,
+                "ports": ports,
+                "active": any(port["active"] for port in ports),
+            }
+        )
+
+    return devices
+
+
+def _interface_ipv4_map() -> Dict[str, str]:
+    mapping: Dict[str, str] = {}
+    try:
+        import fcntl
+        import struct
+    except Exception:
+        return mapping
+
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    except OSError as exc:
+        mapping["__error__"] = f"interface-socket-open-failed: {exc}"
+        return mapping
+    try:
+        for _, ifname in socket.if_nameindex():
+            packed = struct.pack("256s", ifname[:15].encode("utf-8"))
+            try:
+                response = fcntl.ioctl(sock.fileno(), 0x8915, packed)  # SIOCGIFADDR
+            except OSError:
+                continue
+            mapping[ifname] = socket.inet_ntoa(response[20:24])
+    finally:
+        sock.close()
+    return mapping
+
+
+def rdma_host_binding_report(host: str) -> Dict[str, Any]:
+    report: Dict[str, Any] = {
+        "host": host,
+        "resolved_ip": None,
+        "matched_rdma_netdev": False,
+        "matches": [],
+    }
+    if host in {"", "0.0.0.0", "::"}:
+        report["note"] = "wildcard host cannot prove RDMA netdev binding"
+        return report
+
+    try:
+        resolved_ip = socket.gethostbyname(host)
+    except OSError as exc:
+        report["error"] = f"resolve failed: {exc}"
+        return report
+
+    report["resolved_ip"] = resolved_ip
+    if resolved_ip.startswith("127."):
+        report["note"] = "loopback host is not an RDMA NIC path"
+        return report
+
+    ip_by_if = _interface_ipv4_map()
+    iface_error = ip_by_if.get("__error__")
+    if iface_error:
+        report["note"] = iface_error
+        return report
+
+    matches = []
+    for nic in list_rdma_nics():
+        if not nic.get("active", False):
+            continue
+        for netdev in nic.get("netdevs", []):
+            if ip_by_if.get(netdev) == resolved_ip:
+                matches.append(
+                    {
+                        "device": nic.get("device"),
+                        "netdev": netdev,
+                    }
+                )
+
+    report["matches"] = matches
+    report["matched_rdma_netdev"] = len(matches) > 0
+    if not matches:
+        report["note"] = "no active RDMA netdev owns this host IP"
+    return report
 
 
 def _ensure_rdma() -> ctypes.CDLL:

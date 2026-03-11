@@ -82,4 +82,5 @@ def parse_cn_config(raw: Dict[str, Any], root_require_tdx: bool) -> CNConfig:
         max_retries=int(raw.get("max_retries", 8)),
         require_tdx=bool(raw.get("require_tdx", root_require_tdx)),
         cache_path_transport=str(raw.get("cache_path_transport", "auto")),
+        trace_operations=bool(raw.get("trace_operations", True)),
     )
