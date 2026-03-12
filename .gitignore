@@ -16,6 +16,7 @@
 
 # Public headers.
 /include/*
+!/include/*.h
 !/include/kvs/
 /include/kvs/*
 !/include/kvs/*.h

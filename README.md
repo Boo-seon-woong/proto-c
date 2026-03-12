@@ -7,7 +7,7 @@
 - `src/` + `include/` 기반의 명시적 C 모듈 구조
 - CN/MN 상태를 동적 객체 대신 구조체, 해시 버킷, LRU, 슬롯/prime 포인터로 관리
 - TCP control path와 rsocket 기반 RDMA cache path를 transport 계층으로 분리
-- OpenSSL 기반 AEAD 암호화와 Jansson 기반 JSON config/RPC 처리
+- OpenSSL 기반 AEAD 암호화와 내장 JSON config/RPC 처리
 - C 통합 테스트(`make test`) 제공
 
 참고:
@@ -38,9 +38,12 @@ make
 
 필요 라이브러리:
 
-- `jansson`
 - `openssl`
 - `librdmacm`
+
+참고:
+
+- JSON 처리는 저장소 내부의 경량 `jansson` 호환 레이어로 빌드됩니다.
 
 ## Functional Scope
 

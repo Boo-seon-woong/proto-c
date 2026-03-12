@@ -2,10 +2,11 @@ CC ?= cc
 CFLAGS ?= -O2 -g
 WARNFLAGS := -Wall -Wextra -Wpedantic -Werror
 CPPFLAGS += -Iinclude
-LDLIBS += $(shell pkg-config --libs jansson openssl librdmacm)
-PKG_CFLAGS := $(shell pkg-config --cflags jansson openssl librdmacm)
+LDLIBS += $(shell pkg-config --libs openssl librdmacm)
+PKG_CFLAGS := $(shell pkg-config --cflags openssl librdmacm)
 
 SRC := \
+	src/jansson.c \
 	src/common.c \
 	src/models.c \
 	src/config.c \
