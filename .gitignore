@@ -1,3 +1,43 @@
-__pycache__/
-*.pyc
-build/state/
+# Commit only the C prototype system and the files needed to build/run it.
+/*
+!/.gitignore
+!/Makefile
+!/README.md
+!/build/
+!/include/
+!/src/
+!/tests/
+
+# Keep only example configs under build/.
+/build/*
+!/build/*.example.json
+/build/config.json
+/build/state/
+
+# Public headers.
+/include/*
+!/include/kvs/
+/include/kvs/*
+!/include/kvs/*.h
+
+# Shared sources and CN/MN modules.
+/src/*
+!/src/*.c
+!/src/*.h
+!/src/cn/
+!/src/mn/
+/src/cn/*
+!/src/cn/*.c
+!/src/cn/*.h
+/src/mn/*
+!/src/mn/*.c
+!/src/mn/*.h
+
+# Commit only C-based tests.
+/tests/*
+!/tests/*.c
+!/tests/*.h
+
+# Build artifacts.
+/bin/
+*.o

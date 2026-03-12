@@ -4,8 +4,8 @@
   "cn": {
     "client_id": "cn-1",
     "encryption_key_hex": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
-    "replication_factor": 2,
-    "cache_path_transport": "rdma",
+    "replication_factor": 1,
+    "cache_path_transport": "auto",
     "trace_operations": true,
     "populate_cache_on_read_miss": true,
     "max_retries": 16,
@@ -13,16 +13,9 @@
       {
         "node_id": "mn-1",
         "host": "10.20.26.87",
-        "rdma_host": "10.20.26.87",
+        "rdma_host": "192.168.80.3",
         "port": 7001,
         "rdma_port": 7101
-      },
-      {
-        "node_id": "mn-2",
-        "host": "10.20.26.87",
-        "rdma_host": "10.20.26.87",
-        "port": 7002,
-        "rdma_port": 7102
       }
     ]
   }

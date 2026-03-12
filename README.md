@@ -1,125 +1,129 @@
 # TDX-Compatible Client-Centric KVS Prototype
 
-`skill.md` 설계를 기준으로 CN/MN 역할 분리, cache-prime 기반 CAS 합의, ciphertext-only shared/private 메모리 모델을 구현한 프로토타입입니다.
-현재는 cache path를 RDMA(`librdmacm` rsocket)로, private miss 경로를 TCP RPC로 분리할 수 있습니다.
-현재 RDMA 구현은 `rsocket` 기반 two-sided RPC이므로, one-sided RDMA처럼 MN CPU를 완전히 우회하지는 않습니다.
+이 저장소의 주 구현은 이제 Python 프로토타입이 아니라 C 기반 런타임입니다. JSON config 형식과 CN/MN 기능 계약은 유지하면서, 내부 구현은 보다 전형적인 RDMA 시스템 소프트웨어 구조로 재편했습니다.
 
-## 구현 범위
+핵심 변경점:
+
+- `src/` + `include/` 기반의 명시적 C 모듈 구조
+- CN/MN 상태를 동적 객체 대신 구조체, 해시 버킷, LRU, 슬롯/prime 포인터로 관리
+- TCP control path와 rsocket 기반 RDMA cache path를 transport 계층으로 분리
+- OpenSSL 기반 AEAD 암호화와 Jansson 기반 JSON config/RPC 처리
+- C 통합 테스트(`make test`) 제공
+
+참고:
+
+- 기존 `kvs/` Python 코드는 설계 참고용으로 남아 있습니다.
+- 현재 RDMA 경로는 `librdmacm` `rsocket` 기반 two-sided RPC입니다. one-sided verbs data path처럼 MN CPU를 완전히 우회하지는 않습니다.
+
+## Layout
+
+- `src/cn/`: CN path, operation modules, snapshot consensus
+- `src/mn/`: MN path
+- `src/`: shared runtime modules
+- `include/`: public headers
+- `build/`: config examples
+- `tests/`: C integration tests
+- `kvs/`: legacy Python reference prototype
+
+## Build
+
+```bash
+make
+```
+
+생성물:
+
+- `bin/kvs`
+- `bin/kvs-test`
+
+필요 라이브러리:
+
+- `jansson`
+- `openssl`
+- `librdmacm`
+
+## Functional Scope
 
 - Authoritative commit pointer: `CachePrimeTable[key] = (addr, epoch)`
-- Fast path write/update (cache hit): CN이 RDMA cache path에서 slot 할당/암호화/CAS 수행
-- Cache miss 경로: CN이 MN CPU private fetch 호출 후 cache slot에 재삽입
-- Read snapshot rule: `prime1 -> slot -> prime2` 더블체크 불일치 시 retry
-- Eviction: PrimeEntry 기준 victim 선택, ciphertext를 private backing에 flush 후 prime 제거
-- Delete: tombstone write + CAS, tombstone read는 `NOT_FOUND`
-- Replication: `hash(key) % N` 기반 replica 선택 후 각 replica PrimeEntry CAS
-- Recovery: private backing 파일 기반 cold key 유지, cache/prime는 lazy rebuild
+- FUSEE-style write consensus: `backup CAS -> quorum -> primary commit pointer`
+- Majority quorum rule: `Q = floor(R / 2) + 1`
+- Fast-path write/update via cache slot allocation + prime CAS
+- Cache miss 시 private fetch 후 cache promote
+- Read snapshot rule: `prime1 -> slot -> prime2`
+- Tombstone delete
+- LRU eviction + private backing flush
+- Replica fan-out (`hash(key) % N`) + backup rollback on aborted quorum attempts
+- Private backing file 기반 lazy recovery
 
-## 디렉터리
+## Config
 
-- `kvs/`: 구현 코드
-- `build/`: 역할 선택용 설정 파일 및 예시
-- `tests/`: 통합 테스트
+기존 JSON 스키마를 유지합니다.
 
-## 역할 선택 방식
+- `role: "mn"`: MN daemon
+- `role: "cn"`: CN CLI
+- `require_tdx: true`: TDX guest 강제
+- `mn.enable_rdma_server: true`: RDMA cache-path listener 활성화
+- `cn.cache_path_transport: "tcp" | "auto" | "rdma"`
 
-노드 역할은 config 파일의 `role` 값으로 결정됩니다.
-
-- `role: "mn"` -> Memory Node 서버 실행
-- `role: "cn"` -> Client Node CLI 실행
-- `require_tdx: true` -> TDX guest 환경이 아니면 시작 즉시 실패
-- `mn.enable_rdma_server: true` -> MN에서 RDMA cache-path 서버 활성화
-- `cn.cache_path_transport: "rdma"` -> CN에서 cache 연산을 RDMA로 강제
-- `cn.trace_operations: true` -> read/write/update/delete 시 cache hit/miss + RDMA/TCP 경로를 터미널에 출력
-
-기본 config 경로는 `build/config.json` 입니다.
-
-## Config 예시
+예시:
 
 - `build/config.mn.example.json`
 - `build/config.mn2.example.json`
 - `build/config.cn.example.json`
 
-필요하면 예시 파일을 복사해 실제 실행 config로 사용하면 됩니다.
+## Run
 
-## 실행 예시
+majority quorum을 의미 있게 쓰려면 MN 3개 이상이 필요합니다. 현재 예제 파일은 `mn-1`, `mn-2`만 제공하므로, `build/config.mn2.example.json`을 복제해서 `mn-3`용 포트/ID/state_dir만 바꿔 추가하면 됩니다.
 
-`build/config.mn.example.json`과 `build/config.mn2.example.json`은 `require_tdx: true`로 설정되어 있습니다.
-TDX VM 게스트 외부에서 테스트할 때는 해당 값을 `false`로 바꿔야 서버가 시작됩니다.
-
-### 1) MN 2개 실행
+MN 실행:
 
 ```bash
-python3 -m kvs --config build/config.mn.example.json serve
-python3 -m kvs --config build/config.mn2.example.json serve
+bin/kvs --config build/config.mn.example.json serve
+bin/kvs --config build/config.mn2.example.json serve
 ```
 
-네트워크/방화벽:
-- TCP control plane: `7001`, `7002`
-- RDMA cache path: `7101`, `7102`
-- CN에서 위 포트로 모두 접근 가능해야 합니다.
-
-### 2) CN로 write/update/read/delete
+CN 명령 실행:
 
 ```bash
-python3 -m kvs --config build/config.cn.example.json write user:1 hello
-python3 -m kvs --config build/config.cn.example.json update user:1 hello-v2
-python3 -m kvs --config build/config.cn.example.json read user:1
-python3 -m kvs --config build/config.cn.example.json delete user:1
-python3 -m kvs --config build/config.cn.example.json read user:1
+bin/kvs --config build/config.cn.example.json write user:1 hello
+bin/kvs --config build/config.cn.example.json update user:1 hello-v2
+bin/kvs --config build/config.cn.example.json read user:1
+bin/kvs --config build/config.cn.example.json delete user:1
+bin/kvs --config build/config.cn.example.json state
+bin/kvs --config build/config.cn.example.json verify-rdma
 ```
 
-### 3) 상태 확인
+REPL:
 
 ```bash
-python3 -m kvs --config build/config.cn.example.json state
+bin/kvs --config build/config.cn.example.json repl
 ```
 
-### 4) REPL
+## Test
 
 ```bash
-python3 -m kvs --config build/config.cn.example.json repl
+make test
 ```
 
-### 5) RDMA 경로 점검
+현재 테스트 범위:
 
-```bash
-python3 -m kvs --config build/config.cn.example.json verify-rdma
-```
+- write/read/update/delete
+- eviction + private backing recovery
+- quorum write with one backup down
+- primary-unavailable write failure
 
-출력 항목:
-- RDMA runtime profile (`supported`, `implementation`, `one_sided`, `mn_cpu_bypass`)
-- 로컬 RDMA NIC/포트 상태
-- endpoint별 `rdma_read_prime` probe가 RDMA인지, fallback(TCP)인지
+## Architecture Notes
 
-## 테스트
-
-```bash
-python3 -m unittest discover -s tests -v
-```
-
-## 암호화 구현
-
-- `cryptography` 패키지가 있으면 AES-GCM 사용
-- 없으면 표준 라이브러리 기반 authenticated stream fallback(`hmac-stream-v1`) 사용
-
-Shared memory와 private backing 모두 ciphertext만 저장하며, CN만 복호화 키를 가집니다.
-
-## RDMA + TCP 분리 설정 요약
-
-- MN
-  - `listen_host/listen_port`: TCP control plane (`cpu_fetch_private` 등)
-  - `rdma_listen_host/rdma_listen_port`: RDMA cache path (`rdma_*` 액션)
-- CN endpoint
-  - `host`/`port`: TCP control plane 대상
-  - `rdma_host`/`rdma_port`: RDMA cache path 대상 (`rdma_host` 미설정 시 `host` 사용)
-- CN 정책
-  - `cache_path_transport: "rdma"`: RDMA 실패 시 즉시 에러
-  - `cache_path_transport: "auto"`: RDMA 실패 시 TCP fallback
-  - `trace_operations: true`: CRUD 요청마다 hit/miss + transport trace 출력
-
-주의:
-- RDMA cache path는 일반적으로 loopback(`127.0.0.1`)에서 동작하지 않습니다.
-- `rdma_listen_host`/`mn_endpoints.rdma_host`는 RDMA NIC가 붙은 실제 인터페이스 IP를 사용해야 합니다.
-- TDX VM이 host-forward TCP(`host`) + guest 직접 RDMA(`rdma_host`)를 같이 쓰는 토폴로지라면 `host`와 `rdma_host`를 분리해서 설정해야 합니다.
-- `verify-rdma`가 RDMA probe 성공을 보여도, 현재 구현은 one-sided RDMA CPU-bypass가 아니라 two-sided RPC 모델입니다.
+- `src/mn/node.c`: cache slots, prime table, eviction, private backing persistence
+- `src/cn/node.c`: CN lifecycle, replica selection, cluster debug, RDMA verification
+- `src/cn/cache_rpc.c`: cache-path transport dispatch
+- `src/cn/commit.c`: FUSEE-style backup quorum, rollback, primary-last commit orchestration
+- `src/cn/insert.c`: expected-null insert/promote prepare/CAS/rollback path
+- `src/cn/write.c`: write command path
+- `src/cn/update.c`: expected-present update prepare/CAS/rollback path
+- `src/cn/read.c`: read command path
+- `src/cn/snapshot.c`: snapshot consensus double-check path
+- `src/cn/delete.c`: delete/tombstone path
+- `src/rpc.c`: TCP control plane RPC
+- `src/rdma_rpc.c`: rsocket RDMA cache-path RPC
+- `src/crypto.c`: AES-GCM, fallback authenticated stream

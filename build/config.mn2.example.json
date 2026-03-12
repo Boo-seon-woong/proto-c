@@ -1,6 +1,6 @@
 {
   "role": "mn",
-  "require_tdx": true,
+  "require_tdx": false,
   "mn": {
     "node_id": "mn-2",
     "listen_host": "0.0.0.0",
