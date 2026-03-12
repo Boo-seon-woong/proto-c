@@ -244,6 +244,7 @@ static int kvs_parse_cn_config(
     }
     out->require_tdx = kvs_get_bool(cn, "require_tdx", root_require_tdx);
     out->trace_operations = kvs_get_bool(cn, "trace_operations", true);
+    out->print_operation_latency = kvs_get_bool(cn, "print_operation_latency", false);
     transport = json_string_value(json_object_get(cn, "cache_path_transport"));
     if (transport == NULL) {
         transport = "auto";

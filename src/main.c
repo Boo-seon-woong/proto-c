@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <wordexp.h>
 
@@ -20,8 +21,85 @@ static void kvs_on_signal(int signo) {
     kvs_stop_requested = 1;
 }
 
+static uint64_t kvs_now_ns(void) {
+    struct timespec ts;
+
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ((uint64_t) ts.tv_sec * 1000000000ull) + (uint64_t) ts.tv_nsec;
+}
+
+static void kvs_print_latency(
+    const char *client_id,
+    const char *operation,
+    const char *key,
+    int rc,
+    uint64_t elapsed_ns
+) {
+    fprintf(
+        stderr,
+        "[CN-LATENCY][%s] op=%s key=%s result=%s latency_ms=%.3f\n",
+        client_id != NULL ? client_id : "-",
+        operation,
+        key != NULL ? key : "-",
+        rc == 0 ? "ok" : "error",
+        (double) elapsed_ns / 1000000.0
+    );
+}
+
+static int kvs_run_cn_write_like(
+    kvs_cn_node *node,
+    const char *client_id,
+    bool latency_enabled,
+    const char *operation,
+    const char *key,
+    const char *value,
+    char *err,
+    size_t err_len
+) {
+    uint64_t started_at = 0u;
+    int rc;
+
+    if (latency_enabled) {
+        started_at = kvs_now_ns();
+    }
+    if (strcmp(operation, "write") == 0) {
+        rc = kvs_cn_write(node, key, value, err, err_len);
+    } else if (strcmp(operation, "update") == 0) {
+        rc = kvs_cn_update(node, key, value, err, err_len);
+    } else {
+        rc = kvs_cn_delete(node, key, err, err_len);
+    }
+    if (latency_enabled) {
+        kvs_print_latency(client_id, operation, key, rc, kvs_now_ns() - started_at);
+    }
+    return rc;
+}
+
+static int kvs_run_cn_read_with_latency(
+    kvs_cn_node *node,
+    const char *client_id,
+    bool latency_enabled,
+    const char *key,
+    char **value_out,
+    bool *found_out,
+    char *err,
+    size_t err_len
+) {
+    uint64_t started_at = 0u;
+    int rc;
+
+    if (latency_enabled) {
+        started_at = kvs_now_ns();
+    }
+    rc = kvs_cn_read(node, key, value_out, found_out, err, err_len);
+    if (latency_enabled) {
+        kvs_print_latency(client_id, "read", key, rc, kvs_now_ns() - started_at);
+    }
+    return rc;
+}
+
 static void kvs_print_usage(FILE *out) {
-    fprintf(out, "Usage: kvs [--config path] <command> [args]\n");
+    fprintf(out, "Usage: kvs [--config path] [--latency] <command> [args]\n");
     fprintf(out, "Commands:\n");
     fprintf(out, "  serve\n");
     fprintf(out, "  write <key> <value>\n");
@@ -33,11 +111,15 @@ static void kvs_print_usage(FILE *out) {
     fprintf(out, "  repl\n");
 }
 
-static int kvs_run_repl(kvs_cn_node *node) {
+static int kvs_run_repl(kvs_cn_node *node, const char *client_id, bool latency_enabled) {
     char *line = NULL;
     size_t line_cap = 0;
     ssize_t line_len;
-    fprintf(stdout, "CN REPL commands: write <k> <v>, update <k> <v>, read <k>, delete <k>, state, verify-rdma, quit\n");
+    fprintf(
+        stdout,
+        "CN REPL commands: write <k> <v>, update <k> <v>, read <k>, delete <k>, state, verify-rdma, quit (latency=%s)\n",
+        latency_enabled ? "on" : "off"
+    );
     while ((line_len = getline(&line, &line_cap, stdin)) >= 0) {
         wordexp_t words;
         char err[256];
@@ -56,13 +138,31 @@ static int kvs_run_repl(kvs_cn_node *node) {
             continue;
         }
         if (strcmp(words.we_wordv[0], "write") == 0 && words.we_wordc >= 3u) {
-            if (kvs_cn_write(node, words.we_wordv[1], words.we_wordv[2], err, sizeof(err)) != 0) {
+            if (kvs_run_cn_write_like(
+                    node,
+                    client_id,
+                    latency_enabled,
+                    "write",
+                    words.we_wordv[1],
+                    words.we_wordv[2],
+                    err,
+                    sizeof(err)
+                ) != 0) {
                 fprintf(stdout, "ERROR: %s\n", err);
             } else {
                 fprintf(stdout, "OK\n");
             }
         } else if (strcmp(words.we_wordv[0], "update") == 0 && words.we_wordc >= 3u) {
-            if (kvs_cn_update(node, words.we_wordv[1], words.we_wordv[2], err, sizeof(err)) != 0) {
+            if (kvs_run_cn_write_like(
+                    node,
+                    client_id,
+                    latency_enabled,
+                    "update",
+                    words.we_wordv[1],
+                    words.we_wordv[2],
+                    err,
+                    sizeof(err)
+                ) != 0) {
                 fprintf(stdout, "ERROR: %s\n", err);
             } else {
                 fprintf(stdout, "OK\n");
@@ -70,14 +170,32 @@ static int kvs_run_repl(kvs_cn_node *node) {
         } else if (strcmp(words.we_wordv[0], "read") == 0 && words.we_wordc == 2u) {
             char *value = NULL;
             bool found = false;
-            if (kvs_cn_read(node, words.we_wordv[1], &value, &found, err, sizeof(err)) != 0) {
+            if (kvs_run_cn_read_with_latency(
+                    node,
+                    client_id,
+                    latency_enabled,
+                    words.we_wordv[1],
+                    &value,
+                    &found,
+                    err,
+                    sizeof(err)
+                ) != 0) {
                 fprintf(stdout, "ERROR: %s\n", err);
             } else {
                 fprintf(stdout, "%s\n", found ? value : "NOT_FOUND");
             }
             free(value);
         } else if (strcmp(words.we_wordv[0], "delete") == 0 && words.we_wordc == 2u) {
-            if (kvs_cn_delete(node, words.we_wordv[1], err, sizeof(err)) != 0) {
+            if (kvs_run_cn_write_like(
+                    node,
+                    client_id,
+                    latency_enabled,
+                    "delete",
+                    words.we_wordv[1],
+                    NULL,
+                    err,
+                    sizeof(err)
+                ) != 0) {
                 fprintf(stdout, "ERROR: %s\n", err);
             } else {
                 fprintf(stdout, "OK\n");
@@ -111,6 +229,7 @@ int main(int argc, char **argv) {
     kvs_node_config config;
     int argi = 1;
     int rc = 1;
+    bool force_latency = false;
 
     memset(&config, 0, sizeof(config));
     while (argi < argc) {
@@ -121,6 +240,11 @@ int main(int argc, char **argv) {
             }
             config_path = argv[argi + 1];
             argi += 2;
+            continue;
+        }
+        if (strcmp(argv[argi], "--latency") == 0) {
+            force_latency = true;
+            argi += 1;
             continue;
         }
         command = argv[argi++];
@@ -139,6 +263,9 @@ int main(int argc, char **argv) {
         fprintf(stderr, "%s\n", err);
         kvs_free_config(&config);
         return 1;
+    }
+    if (force_latency && config.role == KVS_ROLE_CN) {
+        config.cn.print_operation_latency = true;
     }
 
     if (config.role == KVS_ROLE_MN) {
@@ -199,33 +326,70 @@ int main(int argc, char **argv) {
 
     {
         kvs_cn_node *node = kvs_cn_node_create(&config.cn, err, sizeof(err));
+        bool latency_enabled = config.cn.print_operation_latency;
         if (node == NULL) {
             fprintf(stderr, "%s\n", err);
             kvs_free_config(&config);
             return 1;
         }
         if (command == NULL) {
-            rc = kvs_run_repl(node);
+            rc = kvs_run_repl(node, config.cn.client_id, latency_enabled);
         } else if (strcmp(command, "write") == 0 && argi + 1 < argc) {
-            rc = kvs_cn_write(node, argv[argi], argv[argi + 1], err, sizeof(err));
+            rc = kvs_run_cn_write_like(
+                node,
+                config.cn.client_id,
+                latency_enabled,
+                "write",
+                argv[argi],
+                argv[argi + 1],
+                err,
+                sizeof(err)
+            );
             if (rc == 0) {
                 puts("OK");
             }
         } else if (strcmp(command, "update") == 0 && argi + 1 < argc) {
-            rc = kvs_cn_update(node, argv[argi], argv[argi + 1], err, sizeof(err));
+            rc = kvs_run_cn_write_like(
+                node,
+                config.cn.client_id,
+                latency_enabled,
+                "update",
+                argv[argi],
+                argv[argi + 1],
+                err,
+                sizeof(err)
+            );
             if (rc == 0) {
                 puts("OK");
             }
         } else if (strcmp(command, "read") == 0 && argi < argc) {
             char *value = NULL;
             bool found = false;
-            rc = kvs_cn_read(node, argv[argi], &value, &found, err, sizeof(err));
+            rc = kvs_run_cn_read_with_latency(
+                node,
+                config.cn.client_id,
+                latency_enabled,
+                argv[argi],
+                &value,
+                &found,
+                err,
+                sizeof(err)
+            );
             if (rc == 0) {
                 puts(found ? value : "NOT_FOUND");
             }
             free(value);
         } else if (strcmp(command, "delete") == 0 && argi < argc) {
-            rc = kvs_cn_delete(node, argv[argi], err, sizeof(err));
+            rc = kvs_run_cn_write_like(
+                node,
+                config.cn.client_id,
+                latency_enabled,
+                "delete",
+                argv[argi],
+                NULL,
+                err,
+                sizeof(err)
+            );
             if (rc == 0) {
                 puts("OK");
             }
@@ -244,7 +408,7 @@ int main(int argc, char **argv) {
             }
             rc = kvs_cn_verify_rdma(node, probe_key, stdout, err, sizeof(err));
         } else if (strcmp(command, "repl") == 0) {
-            rc = kvs_run_repl(node);
+            rc = kvs_run_repl(node, config.cn.client_id, latency_enabled);
         } else {
             kvs_print_usage(stderr);
             rc = 1;

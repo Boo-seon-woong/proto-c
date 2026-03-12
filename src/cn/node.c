@@ -46,6 +46,7 @@ static int kvs_copy_cn_config(const kvs_cn_config *src, kvs_cn_config *dst, char
     dst->require_tdx = src->require_tdx;
     dst->cache_path_transport = src->cache_path_transport;
     dst->trace_operations = src->trace_operations;
+    dst->print_operation_latency = src->print_operation_latency;
     for (i = 0u; i < src->mn_endpoint_count; ++i) {
         dst->mn_endpoints[i].node_id = kvs_strdup(src->mn_endpoints[i].node_id);
         dst->mn_endpoints[i].host = kvs_strdup(src->mn_endpoints[i].host);

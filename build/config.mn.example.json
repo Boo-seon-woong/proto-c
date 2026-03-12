@@ -3,11 +3,11 @@
   "require_tdx": false,
   "mn": {
     "node_id": "mn-1",
-    "listen_host": "10.20.18.199",
+    "listen_host": "10.20.26.87",
     "listen_port": 7001,
     "enable_rdma_server": true,
     "require_rdma_server": true,
-    "rdma_listen_host": "192.168.80.1",
+    "rdma_listen_host": "192.168.80.3",
     "rdma_listen_port": 7101,
     "cache_capacity": 1024,
     "state_dir": "state/mn-1"

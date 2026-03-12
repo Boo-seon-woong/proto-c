@@ -67,6 +67,7 @@ make
 - `require_tdx: true`: TDX guest 강제
 - `mn.enable_rdma_server: true`: RDMA cache-path listener 활성화
 - `cn.cache_path_transport: "tcp" | "auto" | "rdma"`
+- `cn.print_operation_latency: true`: `write/update/read/delete` latency를 `stderr`로 출력
 
 예시:
 
@@ -88,6 +89,7 @@ bin/kvs --config build/config.mn2.example.json serve
 CN 명령 실행:
 
 ```bash
+bin/kvs --config build/config.cn.example.json --latency write user:1 hello
 bin/kvs --config build/config.cn.example.json write user:1 hello
 bin/kvs --config build/config.cn.example.json update user:1 hello-v2
 bin/kvs --config build/config.cn.example.json read user:1
@@ -100,6 +102,7 @@ REPL:
 
 ```bash
 bin/kvs --config build/config.cn.example.json repl
+bin/kvs --config build/config.cn.example.json --latency repl
 ```
 
 ## Test

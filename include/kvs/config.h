@@ -37,6 +37,7 @@ typedef struct {
     bool require_tdx;
     kvs_cache_transport cache_path_transport;
     bool trace_operations;
+    bool print_operation_latency;
 } kvs_cn_config;
 
 typedef struct {

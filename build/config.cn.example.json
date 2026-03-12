@@ -7,6 +7,7 @@
     "replication_factor": 1,
     "cache_path_transport": "auto",
     "trace_operations": true,
+    "print_operation_latency": false,
     "populate_cache_on_read_miss": true,
     "max_retries": 16,
     "mn_endpoints": [
